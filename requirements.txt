@@ -1,0 +1,3 @@
+rumps>=0.4.0
+requests>=2.32
+urllib3<2  # urllib3 2.x 与当前 requests 版本不兼容
