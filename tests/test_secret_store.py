@@ -1,21 +1,43 @@
 import json
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import secret_store
 
 
-class SecretStoreTests(unittest.TestCase):
-    @patch("secret_store.subprocess.run")
-    def test_loads_ark_credentials_from_keychain(self, run):
-        run.return_value = Mock(
-            returncode=0,
-            stdout=json.dumps({"cookie": "private-cookie", "web_id": "private-web-id"}),
+class ArkKeyringTests(unittest.TestCase):
+    @patch("secret_store.keyring.get_password")
+    def test_loads_ark_credentials(self, get_password):
+        get_password.return_value = json.dumps(
+            {"cookie": "private-cookie", "web_id": "private-web-id"}
         )
 
         result = secret_store.load_ark_credentials()
 
+        get_password.assert_called_once_with(
+            secret_store.ARK_SERVICE, secret_store.ACCOUNT
+        )
         self.assertEqual(result, ("private-cookie", "private-web-id"))
+
+    @patch("secret_store.keyring.get_password", return_value=None)
+    def test_loads_missing_ark_credentials_as_empty(self, get_password):
+        self.assertEqual(secret_store.load_ark_credentials(), ("", ""))
+
+    @patch("secret_store.keyring.get_password")
+    def test_keychain_failure_returns_empty(self, get_password):
+        get_password.side_effect = RuntimeError("no secret service")
+
+        self.assertEqual(secret_store.load_ark_credentials(), ("", ""))
+        self.assertEqual(secret_store.load_glm_api_key(), "")
+
+    @patch("secret_store.keyring.set_password")
+    def test_saves_ark_credentials_as_json_payload(self, set_password):
+        secret_store.save_ark_credentials("cookie-1", "web-1")
+
+        payload = set_password.call_args.args[2]
+        self.assertEqual(
+            json.loads(payload), {"cookie": "cookie-1", "web_id": "web-1"}
+        )
 
     @patch("secret_store.save_ark_credentials")
     def test_migrates_config_credentials_and_clears_plaintext(self, save_secret):
@@ -37,36 +59,21 @@ class SecretStoreTests(unittest.TestCase):
         save_config.assert_called_once_with(cfg)
 
 
-class KeychainTransportTests(unittest.TestCase):
-    @patch("secret_store.subprocess.run")
-    def test_secret_is_passed_via_stdin_not_argv(self, run):
-        run.return_value = Mock(returncode=0)
+class GlmKeyringTests(unittest.TestCase):
+    @patch("secret_store.keyring.get_password", return_value="stored-api-key")
+    def test_loads_glm_api_key(self, get_password):
+        self.assertEqual(secret_store.load_glm_api_key(), "stored-api-key")
+        get_password.assert_called_once_with(
+            secret_store.GLM_SERVICE, secret_store.ACCOUNT
+        )
 
-        secret_store.save_glm_api_key("super-secret-key")
+    @patch("secret_store.keyring.set_password")
+    def test_saves_glm_api_key(self, set_password):
+        secret_store.save_glm_api_key("key-1")
 
-        call = run.call_args
-        argv = call.args[0]
-        stdin_input = call.kwargs.get("input")
-        self.assertNotIn("super-secret-key", argv)
-        self.assertIn("super-secret-key", stdin_input)
-
-
-class GlmKeychainTests(unittest.TestCase):
-    @patch("secret_store.subprocess.run")
-    def test_loads_glm_api_key_from_keychain(self, run):
-        run.return_value = Mock(returncode=0, stdout="stored-api-key\n")
-
-        result = secret_store.load_glm_api_key()
-
-        self.assertEqual(result, "stored-api-key")
-
-    @patch("secret_store.subprocess.run")
-    def test_loads_missing_glm_key_as_empty(self, run):
-        run.return_value = Mock(returncode=44, stdout="")
-
-        result = secret_store.load_glm_api_key()
-
-        self.assertEqual(result, "")
+        self.assertEqual(
+            set_password.call_args, call(secret_store.GLM_SERVICE, secret_store.ACCOUNT, "key-1")
+        )
 
     @patch("secret_store.save_glm_api_key")
     def test_migrates_plaintext_glm_key_and_clears_config(self, save_key):
@@ -81,7 +88,7 @@ class GlmKeychainTests(unittest.TestCase):
         save_config.assert_called_once_with(cfg)
 
     @patch("secret_store.load_glm_api_key")
-    def test_resolves_to_keychain_when_config_has_no_plaintext(self, load_key):
+    def test_resolves_to_keyring_when_config_has_no_plaintext(self, load_key):
         load_key.return_value = "keychain-key"
         cfg = {"glm": {"enabled": True, "api_key": "", "base_url": ""}}
         save_config = Mock()

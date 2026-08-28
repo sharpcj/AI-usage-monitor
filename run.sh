@@ -17,12 +17,13 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 cd "$PROJECT_DIR" || exit 1
-nohup .venv/bin/python app.py </dev/null >/dev/null 2>&1 &
+# start.py bootstraps the venv/dependencies, then execs app.py.
+nohup python3 start.py </dev/null >/dev/null 2>&1 &
 APP_PID=$!
 printf '%s\n' "$APP_PID" > "$PID_FILE"
 chmod 600 "$PID_FILE"
 
-sleep 1
+sleep 2
 if kill -0 "$APP_PID" 2>/dev/null; then
   echo "AI Usage Monitor started (PID: $APP_PID)"
 else

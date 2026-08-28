@@ -1,71 +1,43 @@
-"""Store provider credentials in the user's macOS Keychain."""
+"""Store provider credentials in the system secret store.
+
+Uses the `keyring` library, which picks the native backend per platform:
+macOS Keychain, Windows Credential Manager, Linux Secret Service.
+"""
 
 import getpass
 import json
-import subprocess
+
+import keyring
 
 ARK_SERVICE = "ai-usage-monitor.ark"
 GLM_SERVICE = "ai-usage-monitor.glm"
 ACCOUNT = getpass.getuser()
 
 
-def _keychain_add(service, secret):
-    """Write a secret to the Keychain, passing it via stdin (not argv).
-
-    `security` re-asks when `-w` has no value, so the secret is supplied
-    twice on stdin and never appears in the process argument list.
-    """
-    result = subprocess.run(
-        [
-            "security",
-            "add-generic-password",
-            "-U",
-            "-a",
-            ACCOUNT,
-            "-s",
-            service,
-            "-w",
-        ],
-        input=f"{secret}\n{secret}\n",
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError("无法写入 macOS Keychain")
+def _set(service, secret):
+    try:
+        keyring.set_password(service, ACCOUNT, secret)
+    except Exception as e:
+        raise RuntimeError(f"无法写入系统凭据存储: {e}") from e
 
 
-def _keychain_find(service):
-    """Read a secret from the Keychain; returns None when absent."""
-    result = subprocess.run(
-        [
-            "security",
-            "find-generic-password",
-            "-a",
-            ACCOUNT,
-            "-s",
-            service,
-            "-w",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if result.returncode != 0:
+def _get(service):
+    try:
+        return keyring.get_password(service, ACCOUNT)
+    except Exception:
         return None
-    return result.stdout.strip()
 
 
 # --- Ark ---
 
 def save_ark_credentials(cookie, web_id):
     payload = json.dumps({"cookie": cookie, "web_id": web_id}, separators=(",", ":"))
-    _keychain_add(ARK_SERVICE, payload)
+    _set(ARK_SERVICE, payload)
 
 
 def load_ark_credentials():
-    payload = _keychain_find(ARK_SERVICE)
-    if payload is None:
+    payload = _get(ARK_SERVICE)
+    if not payload:
         return "", ""
     try:
         data = json.loads(payload)
@@ -75,7 +47,7 @@ def load_ark_credentials():
 
 
 def resolve_ark_credentials(cfg, save_config_callback):
-    """Migrate legacy plaintext credentials, then return Keychain credentials."""
+    """Migrate legacy plaintext credentials, then return stored credentials."""
     ark = cfg.get("ark") or {}
     cookie = str(ark.get("cookie", ""))
     web_id = str(ark.get("web_id", ""))
@@ -92,15 +64,15 @@ def resolve_ark_credentials(cfg, save_config_callback):
 # --- GLM ---
 
 def save_glm_api_key(api_key):
-    _keychain_add(GLM_SERVICE, api_key)
+    _set(GLM_SERVICE, api_key)
 
 
 def load_glm_api_key():
-    return _keychain_find(GLM_SERVICE) or ""
+    return _get(GLM_SERVICE) or ""
 
 
 def resolve_glm_api_key(cfg, save_config_callback):
-    """Migrate a legacy plaintext API key, then return the Keychain key."""
+    """Migrate a legacy plaintext API key, then return the stored key."""
     glm = cfg.get("glm") or {}
     api_key = str(glm.get("api_key", ""))
     if api_key:
