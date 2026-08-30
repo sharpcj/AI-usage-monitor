@@ -10,6 +10,7 @@ Usage:
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import venv
@@ -36,17 +37,36 @@ def venv_python():
     return VENV_DIR / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 
 
+def _uv_venv():
+    """Create the venv with uv (ships its own pip; robust on systems that
+    lack python3-venv/ensurepip). Pinned to the current interpreter so apt's
+    PyGObject (system site-packages, Linux) stays visible."""
+    cmd = ["uv", "venv", "--python", sys.executable]
+    if sys.platform.startswith("linux"):
+        cmd.append("--system-site-packages")
+    subprocess.run([*cmd, str(VENV_DIR)], check=True)
+
+
 def ensure_venv():
     if venv_python().exists():
         return
     print("首次运行：创建虚拟环境 .venv ...")
-    # On Linux we need system_site_packages so PyGObject (installed via apt)
-    # is visible inside the venv; pip cannot build it reliably.
+    if sys.platform.startswith("linux") and shutil.which("uv"):
+        # Prefer uv on Linux: many distros (e.g. Ubuntu without python3-venv)
+        # create a venv with no pip at all, and uv pins the system python so
+        # apt-installed PyGObject remains importable.
+        _uv_venv()
+        return
     venv.create(
         VENV_DIR,
         with_pip=True,
         system_site_packages=sys.platform.startswith("linux"),
     )
+    # venv.create() can succeed while pip is still missing (no ensurepip).
+    if shutil.which("uv") and run_venv(code="import pip").returncode != 0:
+        print("标准 venv 缺少 pip（系统未装 python3-venv），改用 uv 重建 ...")
+        shutil.rmtree(VENV_DIR, ignore_errors=True)
+        _uv_venv()
 
 
 def run_venv(code=None, args=None, **kwargs):
@@ -67,14 +87,24 @@ def ensure_deps():
     if deps_ok():
         return
     print("安装依赖 ...")
-    result = run_venv(
-        args=["-m", "pip", "install", "-q", "-r", str(REQUIREMENTS)]
-    )
-    if result.returncode != 0:
-        sys.exit(
-            "依赖安装失败。请检查网络，或手动执行:\n"
-            f"  {venv_python()} -m pip install -r {REQUIREMENTS}"
+    uv = shutil.which("uv")
+    if uv and run_venv(code="import pip").returncode != 0:
+        # venv 里没有 pip 模块，用 uv 自带的 pip 安装。
+        result = subprocess.run(
+            [
+                uv, "pip", "install", "-q",
+                "--python", str(venv_python()),
+                "-r", str(REQUIREMENTS),
+            ]
         )
+        pip_hint = f"  uv pip install --python {venv_python()} -r {REQUIREMENTS}"
+    else:
+        result = run_venv(
+            args=["-m", "pip", "install", "-q", "-r", str(REQUIREMENTS)]
+        )
+        pip_hint = f"  {venv_python()} -m pip install -r {REQUIREMENTS}"
+    if result.returncode != 0:
+        sys.exit(f"依赖安装失败。请检查网络，或手动执行:\n{pip_hint}")
 
 
 def check_linux_system_packages():

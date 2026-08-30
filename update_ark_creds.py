@@ -1,14 +1,20 @@
-"""Update Ark credentials in Keychain from a cURL command.
+"""Update Ark credentials from a cURL command.
 
 Input sources, in priority order:
 1. Piped stdin (recommended):   cat curl.txt | ./update-ark.sh
                                ./update-ark.sh <<'EOF' ... EOF
 2. Clipboard (interactive):    copy the cURL in the browser (Copy as cURL),
-                               then just run ./update-ark.sh — the script
-                               reads it from the clipboard via pbpaste.
+                               then just run ./update-ark.sh - the script
+                               reads it from the clipboard automatically.
                                No pasting, no Enter, no Ctrl+D needed.
+
+Clipboard support (auto-detected):
+  macOS      -> pbpaste / pbcopy
+  Linux/Way  -> wl-paste / wl-copy   (install: sudo apt install wl-clipboard)
+  Linux/X11  -> xclip / xsel
 """
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -16,19 +22,50 @@ from secret_store import save_ark_credentials, load_ark_credentials
 from providers.ark_provider import get_usage
 
 
+def get_clipboard_tool():
+    """Return a callable that reads the clipboard text, or None if unavailable."""
+    # macOS
+    if shutil.which("pbpaste"):
+        return lambda: subprocess.run(
+            ["pbpaste"], capture_output=True, text=True, timeout=5
+        )
+    # Linux, Wayland first
+    if shutil.which("wl-paste"):
+        return lambda: subprocess.run(
+            ["wl-paste", "--no-newline"], capture_output=True, text=True, timeout=5
+        )
+    # Linux, X11
+    if shutil.which("xclip"):
+        return lambda: subprocess.run(
+            ["xclip", "-selection", "clipboard", "-o"],
+            capture_output=True, text=True, timeout=5,
+        )
+    if shutil.which("xsel"):
+        return lambda: subprocess.run(
+            ["xsel", "--clipboard", "--output"],
+            capture_output=True, text=True, timeout=5,
+        )
+    return None
+
+
 def clear_clipboard():
     """Overwrite the clipboard so the copied cURL (with Cookie) doesn't linger."""
-    try:
-        subprocess.run(
-            ["pbcopy"],
-            input="",
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5,
-        )
-    except Exception:
-        pass
+    clearers = {
+        "pbcopy": ["pbcopy"],
+        "wl-copy": ["wl-copy", "--clipboard"],
+        "xclip": ["xclip", "-selection", "clipboard"],
+        "xsel": ["xsel", "--clipboard", "--input"],
+    }
+    for name, cmd in clearers.items():
+        if shutil.which(name):
+            try:
+                subprocess.run(
+                    cmd, input="", stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL, text=True, timeout=5,
+                )
+            except Exception:
+                pass
+            return
 
 
 def read_curl_command():
@@ -37,10 +74,19 @@ def read_curl_command():
         return sys.stdin.read().strip()
 
     # Interactive: try clipboard first
+    read_clip = get_clipboard_tool()
+    if read_clip is None:
+        print("ERROR: no clipboard tool found.")
+        print("On Linux install one of: wl-clipboard (Wayland), xclip, or xsel.")
+        print("  Ubuntu/Debian: sudo apt install wl-clipboard")
+        print("Alternatively, pipe the cURL command via stdin:")
+        print("  ./update-ark.sh <<'EOF'")
+        print("  curl --url '...' ...")
+        print("  EOF")
+        sys.exit(1)
+
     try:
-        clip = subprocess.run(
-            ["pbpaste"], capture_output=True, text=True, timeout=5
-        )
+        clip = read_clip()
         if clip.returncode == 0 and clip.stdout.strip():
             clear_clipboard()
             return clip.stdout.strip()

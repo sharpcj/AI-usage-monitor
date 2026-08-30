@@ -65,8 +65,18 @@ class LinuxBackend:
             if item.action:
                 mi.connect("activate", self._on_action, item.action)
             else:
-                mi.set_sensitive(False)  # display-only row
+                # display-only row: keep it sensitive so GTK renders it in
+                # the normal (non-greyed) text colour. No "activate" handler
+                # is connected, so clicking it does nothing.
+                pass
             new_menu.append(mi)
+
+        # Always append a separator + 退出 so it survives menu rebuilds.
+        new_menu.append(Gtk.SeparatorMenuItem())
+        quit_item = Gtk.MenuItem(label="退出")
+        quit_item.connect("activate", self._on_quit)
+        new_menu.append(quit_item)
+
         new_menu.show_all()
         self.indicator.set_menu(new_menu)
         if self.menu:
@@ -128,6 +138,7 @@ class LinuxBackend:
             "refresh_interval", core.REFRESH_INTERVAL_DEFAULT
         )
 
+        # Initial quit item; refreshed (and always re-appended) by _rebuild_menu.
         quit_item = Gtk.MenuItem(label="退出")
         quit_item.connect("activate", self._on_quit)
         quit_item.show()

@@ -4,6 +4,7 @@ set -u
 PROJECT_DIR="$(cd "$(dirname "$0")" && pwd)"
 STATE_DIR="$HOME/.config/ai-usage-monitor"
 PID_FILE="$STATE_DIR/app.pid"
+LOG_FILE="$STATE_DIR/run.log"
 
 mkdir -p "$STATE_DIR"
 chmod 700 "$STATE_DIR"
@@ -18,16 +19,20 @@ fi
 
 cd "$PROJECT_DIR" || exit 1
 # start.py bootstraps the venv/dependencies, then execs app.py.
-nohup python3 start.py </dev/null >/dev/null 2>&1 &
+nohup python3 start.py </dev/null >"$LOG_FILE" 2>&1 &
 APP_PID=$!
 printf '%s\n' "$APP_PID" > "$PID_FILE"
 chmod 600 "$PID_FILE"
 
 sleep 2
 if kill -0 "$APP_PID" 2>/dev/null; then
-  echo "AI Usage Monitor started (PID: $APP_PID)"
+  echo "AI Usage Monitor started (PID: $APP_PID)  日志: $LOG_FILE"
 else
   rm -f "$PID_FILE"
   echo "AI Usage Monitor failed to start" >&2
+  if [ -s "$LOG_FILE" ]; then
+    echo "--- 启动日志 ($LOG_FILE) ---" >&2
+    cat "$LOG_FILE" >&2
+  fi
   exit 1
 fi
