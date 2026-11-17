@@ -35,7 +35,8 @@ class ConfigTests(unittest.TestCase):
                             self.assertEqual(persisted[key][field], original)
                     else:
                         self.assertEqual(persisted[key], value)
-                self.assertEqual(os.stat(config_file).st_mode & 0o777, 0o600)
+                if os.name == "posix":
+                    self.assertEqual(os.stat(config_file).st_mode & 0o777, 0o600)
                 with patch.object(config, "save_config") as save:
                     config.load_config()
                     save.assert_not_called()
@@ -70,6 +71,22 @@ class ConfigTests(unittest.TestCase):
 
         self.assertTrue(second["ark"]["enabled"])
 
+    def test_saved_config_round_trips(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            config_dir = Path(temp_dir) / "settings"
+            config_file = config_dir / "config.json"
+            with patch.object(config, "CONFIG_DIR", config_dir), patch.object(
+                config, "CONFIG_FILE", config_file
+            ):
+                config.save_config(config.DEFAULT_CONFIG)
+                self.assertEqual(config.load_config(), config.DEFAULT_CONFIG)
+                self.assertEqual(
+                    json.loads(config_file.read_text(encoding="utf-8")),
+                    config.DEFAULT_CONFIG,
+                )
+                self.assertEqual(list(config_dir.glob("*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "posix", "Requires POSIX permission bits, not Windows ACLs")
     def test_saved_config_is_private(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             config_dir = Path(temp_dir) / "private"
