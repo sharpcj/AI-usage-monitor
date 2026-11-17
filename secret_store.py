@@ -11,6 +11,9 @@ import keyring
 
 ARK_SERVICE = "ai-usage-monitor.ark"
 GLM_SERVICE = "ai-usage-monitor.glm"
+DEEPSEEK_SERVICE = "ai-usage-monitor.deepseek"
+DEEPSEEK_PLATFORM_SERVICE = "ai-usage-monitor.deepseek-platform"
+BAILIAN_SERVICE = "ai-usage-monitor.bailian"
 ACCOUNT = getpass.getuser()
 
 
@@ -82,3 +85,70 @@ def resolve_glm_api_key(cfg, save_config_callback):
         save_config_callback(cfg)
         return api_key
     return load_glm_api_key()
+
+
+# --- Bailian ---
+
+def save_bailian_credentials(cookie, sec_token=""):
+    _set(BAILIAN_SERVICE, json.dumps(
+        {"cookie": cookie, "sec_token": sec_token}, separators=(",", ":")
+    ))
+
+
+def load_bailian_credentials():
+    try:
+        data = json.loads(_get(BAILIAN_SERVICE) or "{}")
+        if not isinstance(data, dict):
+            return "", ""
+        return str(data.get("cookie") or ""), str(data.get("sec_token") or "")
+    except (ValueError, TypeError):
+        return "", ""
+
+
+def resolve_bailian_credentials(cfg, save_config_callback):
+    bailian = cfg.get("bailian") or {}
+    cookie = str(bailian.get("cookie") or "")
+    sec_token = str(bailian.get("sec_token") or "")
+    if cookie:
+        save_bailian_credentials(cookie, sec_token)
+        bailian["cookie"] = ""
+        bailian["sec_token"] = ""
+        cfg["bailian"] = bailian
+        save_config_callback(cfg)
+        return cookie, sec_token
+    return load_bailian_credentials()
+
+
+# --- DeepSeek ---
+
+def save_deepseek_api_key(api_key):
+    _set(DEEPSEEK_SERVICE, api_key)
+
+
+def load_deepseek_api_key():
+    return _get(DEEPSEEK_SERVICE) or ""
+
+
+def save_deepseek_platform_token(token):
+    _set(DEEPSEEK_PLATFORM_SERVICE, token)
+
+
+def load_deepseek_platform_token():
+    return _get(DEEPSEEK_PLATFORM_SERVICE) or ""
+
+
+def resolve_deepseek_credentials(cfg, save_config_callback):
+    """Migrate legacy plaintext values, then return (api_key, platform_token)."""
+    deepseek = cfg.get("deepseek") or {}
+    api_key = str(deepseek.get("api_key", ""))
+    platform_token = str(deepseek.get("platform_token", ""))
+    if api_key or platform_token:
+        if api_key:
+            save_deepseek_api_key(api_key)
+            deepseek["api_key"] = ""
+        if platform_token:
+            save_deepseek_platform_token(platform_token)
+            deepseek["platform_token"] = ""
+        cfg["deepseek"] = deepseek
+        save_config_callback(cfg)
+    return load_deepseek_api_key(), load_deepseek_platform_token()

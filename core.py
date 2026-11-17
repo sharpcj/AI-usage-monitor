@@ -13,7 +13,13 @@ from datetime import datetime
 
 from config import load_config, save_config, CONFIG_FILE
 import secret_store
-from providers import codex_provider, glm_provider, ark_provider
+from providers import (
+    codex_provider,
+    glm_provider,
+    ark_provider,
+    deepseek_provider,
+    bailian_provider,
+)
 
 REFRESH_INTERVAL_DEFAULT = 300  # 5 minutes
 
@@ -125,6 +131,15 @@ class UsageMonitor:
         self._refresh_lock = threading.Lock()
         self._refresh_in_progress = False
 
+    # --- DeepSeek helpers ---
+
+    def _deepseek_cfg(self):
+        """Config section; tolerate configs written before DeepSeek existed."""
+        return self.cfg.get("deepseek") or {}
+
+    def _deepseek_enabled(self):
+        return bool(self._deepseek_cfg().get("enabled"))
+
     # --- refresh ---
 
     def refresh_async(self, on_done=None):
@@ -213,6 +228,42 @@ class UsageMonitor:
                 except Exception as e:
                     issues.append(f"ARK: {e}")
 
+            # --- DeepSeek ---
+            # Pay-as-you-go: balance via API key, spend via console token.
+            if self._deepseek_enabled():
+                try:
+                    api_key, platform_token = (
+                        secret_store.resolve_deepseek_credentials(
+                            self.cfg, save_config
+                        )
+                    )
+                    data = deepseek_provider.get_usage(
+                        api_key, platform_token
+                    )
+                    if data.get("error"):
+                        issues.append(f"DeepSeek: {data['error']}")
+                    else:
+                        results["deepseek"] = data
+                except Exception as e:
+                    issues.append(f"DeepSeek: {e}")
+
+            # --- Bailian personal Token Plan ---
+            if (self.cfg.get("bailian") or {}).get("enabled"):
+                try:
+                    cookie, sec_token = secret_store.resolve_bailian_credentials(
+                        self.cfg, save_config
+                    )
+                    data = (
+                        bailian_provider.get_usage(cookie, sec_token)
+                        if cookie else {"error": "Cookie 未设置"}
+                    )
+                    results["bailian"] = data
+                    if data.get("error"):
+                        issues.append(f"百炼: {data['error']}")
+                except Exception as e:
+                    results["bailian"] = {"error": str(e)}
+                    issues.append(f"百炼: {e}")
+
             self.last_results = results
             self.last_refresh = datetime.now()
             self.issues = issues
@@ -283,6 +334,27 @@ class UsageMonitor:
                     bits.append(f"ARK {remaining:.0f}%")
                     all_remaining.append(remaining)
 
+        if self.last_results.get("bailian"):
+            bailian = self.last_results["bailian"]
+            if "error" not in bailian:
+                used_values = [
+                    clamp_percent(q.get("percent"))
+                    for q in bailian.get("quotas", [])
+                ]
+                used_values = [v for v in used_values if v is not None]
+                if used_values:
+                    remaining = 100 - max(used_values)
+                    bits.append(f"BL {remaining:.0f}%")
+                    all_remaining.append(remaining)
+
+        if self.last_results.get("deepseek"):
+            ds = self.last_results["deepseek"]
+            if "error" not in ds and ds.get("today") is not None:
+                money = deepseek_provider.format_amount(
+                    ds["today"], ds.get("currency", "CNY")
+                )
+                bits.append(f"DS {money}")
+
         worst = min(all_remaining, default=None)
         color = color_for_remaining(worst)
 
@@ -303,6 +375,8 @@ class UsageMonitor:
         items.extend(self._codex_section())
         items.extend(self._glm_section())
         items.extend(self._ark_section())
+        items.extend(self._bailian_section())
+        items.extend(self._deepseek_section())
 
         if self.issues:
             items.append(MenuItem("⚠ 注意事项"))
@@ -397,6 +471,41 @@ class UsageMonitor:
                 items.append(MenuItem("  暂无数据"))
         else:
             err = ark.get("error", "未知错误") if ark else "暂无数据"
+            items.append(MenuItem(f"  ⚠ {err}"))
+        items.append(MenuSeparator())
+        return items
+
+    def _bailian_section(self):
+        if not (self.cfg.get("bailian") or {}).get("enabled"):
+            return []
+        items: list = [MenuItem("百炼 Token Plan")]
+        data = self.last_results.get("bailian")
+        if data and "error" not in data:
+            rows = bailian_provider.format_usage(data)
+            if rows:
+                items.extend(self._usage_rows(rows))
+                items.append(MenuItem("  数据源: 控制台 Cookie"))
+            else:
+                items.append(MenuItem("  暂无数据"))
+        else:
+            err = data.get("error", "未知错误") if data else "暂无数据"
+            items.append(MenuItem(f"  ⚠ {err}"))
+        items.append(MenuSeparator())
+        return items
+
+    def _deepseek_section(self):
+        """Pay-as-you-go provider: amounts instead of percentages."""
+        if not self._deepseek_enabled():
+            return []
+        items: list = [MenuItem("DeepSeek (深度求索)")]
+        ds = self.last_results.get("deepseek")
+        if ds and "error" not in ds:
+            for label, text in deepseek_provider.format_usage(ds):
+                items.append(MenuItem(f"  {pad_label(label, 6)} {text}"))
+            if ds.get("warning"):
+                items.append(MenuItem(f"  ⚠ {ds['warning']}"))
+        else:
+            err = ds.get("error", "未知错误") if ds else "暂无数据"
             items.append(MenuItem(f"  ⚠ {err}"))
         items.append(MenuSeparator())
         return items

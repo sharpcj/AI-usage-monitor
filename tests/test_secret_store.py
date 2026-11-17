@@ -99,5 +99,61 @@ class GlmKeyringTests(unittest.TestCase):
         save_config.assert_not_called()
 
 
+class DeepSeekKeyringTests(unittest.TestCase):
+    @patch("secret_store.keyring.get_password", return_value=None)
+    def test_loads_missing_deepseek_credentials_as_empty(self, _get):
+        self.assertEqual(secret_store.load_deepseek_api_key(), "")
+        self.assertEqual(secret_store.load_deepseek_platform_token(), "")
+
+    @patch("secret_store.keyring.get_password")
+    def test_each_credential_uses_its_own_service(self, get_password):
+        get_password.return_value = "value"
+
+        self.assertEqual(secret_store.load_deepseek_api_key(), "value")
+        get_password.assert_called_with(
+            secret_store.DEEPSEEK_SERVICE, secret_store.ACCOUNT
+        )
+
+        self.assertEqual(secret_store.load_deepseek_platform_token(), "value")
+        get_password.assert_called_with(
+            secret_store.DEEPSEEK_PLATFORM_SERVICE, secret_store.ACCOUNT
+        )
+
+    @patch("secret_store.save_deepseek_api_key")
+    @patch("secret_store.save_deepseek_platform_token")
+    @patch("secret_store.keyring.get_password", return_value="")
+    def test_migrates_both_plaintext_values(
+        self, _get, save_token, save_key
+    ):
+        cfg = {
+            "deepseek": {
+                "enabled": True,
+                "api_key": "sk-legacy",
+                "platform_token": "session-token",
+            }
+        }
+        save_config = Mock()
+
+        api_key, token = secret_store.resolve_deepseek_credentials(cfg, save_config)
+
+        save_key.assert_called_once_with("sk-legacy")
+        save_token.assert_called_once_with("session-token")
+        self.assertEqual(cfg["deepseek"]["api_key"], "")
+        self.assertEqual(cfg["deepseek"]["platform_token"], "")
+        save_config.assert_called_once_with(cfg)
+        self.assertEqual((api_key, token), ("", ""))
+
+    @patch("secret_store.load_deepseek_api_key", return_value="keychain-key")
+    @patch("secret_store.load_deepseek_platform_token", return_value="keychain-token")
+    def test_resolves_from_keyring_and_skips_saving(self, _token, _key):
+        cfg = {"deepseek": {"enabled": True, "api_key": "", "platform_token": ""}}
+        save_config = Mock()
+
+        result = secret_store.resolve_deepseek_credentials(cfg, save_config)
+
+        self.assertEqual(result, ("keychain-key", "keychain-token"))
+        save_config.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

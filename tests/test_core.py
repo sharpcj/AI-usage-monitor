@@ -173,5 +173,90 @@ class MenuModelTests(unittest.TestCase):
         self.assertEqual(refresh.text, "立即刷新")
 
 
+class DeepSeekTitleAndMenuTests(unittest.TestCase):
+    def _deepseek_payload(self):
+        return {
+            "currency": "CNY",
+            "today": 1.23,
+            "last7": 8.5,
+            "days": [
+                {"date": "2026-10-18", "cost": 2.0},
+                {"date": "2026-10-19", "cost": 1.23},
+            ],
+            "balances": [
+                {"currency": "CNY", "total": 7.63, "granted": 0.0, "topped_up": 7.63}
+            ],
+        }
+
+    def test_title_shows_todays_spend(self):
+        monitor = bare_monitor()
+        monitor.last_results = {"deepseek": self._deepseek_payload()}
+
+        title, color = monitor.compute_title()
+
+        self.assertEqual(title, "DS ¥1.23")
+        # DeepSeek has no percentage, so it must not drive the status color.
+        self.assertEqual(color, color_for_remaining(None))
+
+    def test_title_combines_with_quota_providers(self):
+        monitor = bare_monitor()
+        monitor.last_results = {
+            "codex": {"primary": {"used_percent": 4, "label": "小时限额"}},
+            "deepseek": self._deepseek_payload(),
+        }
+
+        title, _color = monitor.compute_title()
+
+        self.assertEqual(title, "CX 96% · DS ¥1.23")
+
+    def test_menu_lists_spend_balance_and_daily_rows(self):
+        monitor = bare_monitor()
+        monitor.cfg = {
+            "codex": {"enabled": False},
+            "glm": {"enabled": False},
+            "ark": {"enabled": False},
+            "deepseek": {"enabled": True},
+        }
+        monitor.last_results = {"deepseek": self._deepseek_payload()}
+
+        texts = [i.text for i in monitor.build_menu() if isinstance(i, MenuItem)]
+
+        self.assertIn("DeepSeek (深度求索)", texts)
+        self.assertTrue(any("今日消费" in t and "¥1.23" in t for t in texts))
+        self.assertTrue(any("近7天合计" in t and "¥8.50" in t for t in texts))
+        self.assertTrue(any("账户余额" in t and "¥7.63" in t for t in texts))
+        # The daily breakdown is deliberately not rendered.
+        self.assertFalse(any("明细" in t for t in texts))
+        self.assertFalse(any(t.strip().startswith("10-") for t in texts))
+
+    def test_menu_hides_section_when_disabled(self):
+        monitor = bare_monitor()
+        monitor.cfg = {
+            "codex": {"enabled": False},
+            "glm": {"enabled": False},
+            "ark": {"enabled": False},
+            "deepseek": {"enabled": False},
+        }
+        monitor.last_results = {"deepseek": self._deepseek_payload()}
+
+        texts = [i.text for i in monitor.build_menu() if isinstance(i, MenuItem)]
+
+        self.assertNotIn("DeepSeek (深度求索)", texts)
+
+    def test_menu_reports_provider_error(self):
+        monitor = bare_monitor()
+        monitor.cfg = {
+            "codex": {"enabled": False},
+            "glm": {"enabled": False},
+            "ark": {"enabled": False},
+            "deepseek": {"enabled": True},
+        }
+        monitor.last_results = {"deepseek": {"error": "API Key 未设置"}}
+
+        texts = [i.text for i in monitor.build_menu() if isinstance(i, MenuItem)]
+
+        self.assertTrue(any("API Key 未设置" in t for t in texts))
+
+
 if __name__ == "__main__":
     unittest.main()

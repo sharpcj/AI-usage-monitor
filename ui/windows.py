@@ -24,6 +24,8 @@ SECTIONS = (
     ("Codex (OpenAI)", "codex", "codex_provider"),
     ("GLM (智谱)", "glm", "glm_provider"),
     ("ARK (火山方舟)", "ark", "ark_provider"),
+    ("百炼 Token Plan", "bailian", "bailian_provider"),
+    ("DeepSeek (深度求索)", "deepseek", "deepseek_provider"),
 )
 
 
@@ -92,6 +94,9 @@ class FlyoutPanel:
             if data is None or "error" in data:
                 continue
             provider = getattr(core, provider_name)
+            if key == "deepseek":
+                self._deepseek_section(title, data)
+                continue
             self._section(title, provider.format_usage(data), data)
 
         if m.issues:
@@ -109,6 +114,24 @@ class FlyoutPanel:
         btns = tk.Frame(self.win)
         btns.pack(side="bottom", fill="x", padx=12, pady=10)
         ttk.Button(btns, text="立即刷新", command=self._refresh).pack(side="right")
+
+    def _deepseek_section(self, title, data):
+        """Amount-based block (pay-as-you-go), not a percentage row set."""
+        ttk.Label(self.win, text=title, font=("", 11, "bold")).pack(
+            anchor="w", padx=12, pady=(8, 2)
+        )
+        for label, text in core.deepseek_provider.format_usage(data):
+            row = tk.Frame(self.win)
+            row.pack(fill="x", padx=12)
+            ttk.Label(row, text=label, width=10, anchor="w").pack(side="left")
+            ttk.Label(row, text=text).pack(side="left")
+        if data.get("warning"):
+            ttk.Label(
+                self.win,
+                text=f"⚠ {data['warning']}",
+                foreground="#a03000",
+                wraplength=330,
+            ).pack(anchor="w", padx=12)
 
     def _section(self, title, rows, data):
         ttk.Label(self.win, text=title, font=("", 11, "bold")).pack(
@@ -149,6 +172,8 @@ class FlyoutPanel:
             meta.append(
                 "arkcli (官方)" if data.get("source") == "arkcli" else "控制台 Cookie"
             )
+        elif title == "百炼 Token Plan":
+            meta.append("数据源: 控制台 Cookie")
         if meta:
             ttk.Label(
                 self.win, text="  ·  ".join(meta), foreground="#555555"

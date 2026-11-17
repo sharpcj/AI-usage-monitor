@@ -1,6 +1,6 @@
 # AI Usage Monitor
 
-跨平台托盘工具（macOS / Windows / Linux），定时查询 OpenAI Codex、GLM 和火山方舟 Coding Plan 的剩余额度。
+跨平台托盘工具（macOS / Windows / Linux），定时查询 OpenAI Codex、GLM、火山方舟 Coding Plan、百炼个人 Token Plan 的剩余额度，以及 DeepSeek 的消费金额与余额。
 
 - **macOS**：菜单栏应用（rumps），标题常显各平台剩余百分比
 - **Windows**：系统托盘（pystray），托盘图标颜色表示状态，左键点击弹出详情浮窗（tkinter）
@@ -65,6 +65,16 @@ systemctl --user enable --now ai-usage-monitor
     "enabled": true,
     "cookie": "",
     "web_id": ""
+  },
+  "bailian": {
+    "enabled": true,
+    "cookie": "",
+    "sec_token": ""
+  },
+  "deepseek": {
+    "enabled": true,
+    "api_key": "",
+    "platform_token": ""
   }
 }
 ```
@@ -105,13 +115,64 @@ arkcli auth login volc-sso   # 浏览器授权一次，之后凭据自动续期
 
 程序和日志不会输出 Cookie、CSRF Token 或 `x-web-id`。
 
+### 百炼个人 Token Plan
+
+查询百炼个人 Token Plan 的月度额度；只显示接口实际返回的额度字段和重置时间，不推测或补造小时、周等窗口。数据源为控制台内部接口，不是模型调用 API，不能用 API Key 替代登录态。
+
+获取凭据（Edge 中文界面）：
+
+1. 登录百炼控制台并打开个人 Token Plan 用量页面。
+2. 按 `F12` 打开开发人员工具，选择“网络”（Network），刷新页面，筛选 `usage`。
+3. 找到请求内容包含 `zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage` 的用量请求（通过网关发送），右键请求 →“复制”→“复制为 cURL (bash)”（不要选择 cmd 或 PowerShell 格式）。
+4. 保持 cURL 在剪贴板中，在项目目录运行：
+
+   ```bash
+   ./update-bailian.sh
+   ```
+
+   Windows 使用 `.venv\Scripts\python.exe update_bailian_creds.py`。macOS 也可用 `pbpaste | ./update-bailian.sh --stdin` 从标准输入读取 cURL，避免把凭据写进命令参数或历史记录。
+
+脚本读取 cURL 中的 Cookie 和 `sec_token`，验证通过后存入系统凭据存储。配置中的 `bailian.cookie`、`bailian.sec_token` 仅用于首次迁移，迁移后清空明文。Cookie 失效时重新复制请求并运行脚本。**不要把 Cookie、`sec_token` 或完整 cURL 发到聊天中，也不要提交到仓库。**
+
+### DeepSeek
+
+DeepSeek 是按量计费（无订阅额度），所以不显示剩余百分比，而是显示**消费金额**和**账户余额**。它需要两个不同的凭据：
+
+| 用途 | 凭据 | 认证方式 |
+|---|---|---|
+| 账户余额 | API Key | `Authorization: Bearer <API Key>` |
+| 今日 / 近 7 天消费（账号级，覆盖全部 API Key） | 平台控制台登录态 Token | 浏览器会话 Token |
+
+1. **API Key**（余额）：临时填入配置中的 `deepseek.api_key`，点击“立即刷新”；程序会把 Key 迁移到系统凭据存储并清空配置文件明文值。
+2. **平台 Token**（消费）：官方没有公开的用量查询 API，消费数据来自控制台内部接口。登录 <https://platform.deepseek.com>，打开开发者工具 Console，执行：
+
+   ```js
+   JSON.parse(localStorage.getItem('userToken')).value
+   ```
+
+   复制输出的字符串，然后运行（自动读取剪贴板，校验通过才写入系统凭据存储）：
+
+   ```bash
+   ./update-deepseek-token.sh
+   ```
+
+   也可用管道传入：`echo '<token>' | ./update-deepseek-token.sh`。
+
+注意：
+
+- 平台 Token 是登录态，通常几天到几周后失效。失效后消费金额会显示警告并继续显示余额，重新运行脚本即可。
+- API Key **不能**查询消费（接口返回 `invalid token`），平台 Token 也不能调用模型。
+- 消费为账号级合计，即“全部 API Key”的总和；与官方账单口径一致。
+
 ## 显示规则
 
-- 标题示例：`CX 96% · GLM 23%· ARK 45%`（macOS 菜单栏 / Linux label 常显；Windows 显示在托盘悬停提示中）
+- 标题示例：`CX 96% · GLM 23% · ARK 45% · BL 80% · DS ¥1.23`（macOS 菜单栏 / Linux label 常显；Windows 显示在托盘悬停提示中）
 - Windows 无常显标题：托盘图标颜色表示整体状态（绿/橙/红），左键点击弹出详情浮窗
 - 所有百分比均表示“剩余”而非“已用”
+- `BL` 表示百炼个人 Token Plan 剩余额度；接口返回多项额度时取最低剩余百分比，详情仅展示实际返回的额度行，数据源标为“控制台 Cookie”
+- DeepSeek 显示的是**今日消费金额**（如 `DS ¥1.23`），不是百分比；它不参与托盘状态颜色的计算
 - 一个套餐存在多个额度窗口时，标题显示最低剩余额度
-- 详情显示各窗口的进度条和重置倒计时
+- 详情显示各窗口的进度条和重置倒计时；DeepSeek 显示今日消费、近 7 天合计和账户余额（不展开每日明细）
 
 ## 数据来源
 
@@ -120,14 +181,17 @@ arkcli auth login volc-sso   # 浏览器授权一次，之后凭据自动续期
 | Codex | `codex app-server` → `account/rateLimits/read` | `~/.codex/auth.json` 中现有 Codex 登录状态 | — |
 | GLM | 官方 Coding Plan 用量 API | API Key（Bearer） | 系统凭据存储* |
 | Ark | 优先 `arkcli usage plan`（官方 CLI），回退控制台 `GetCodingPlanUsage` 内部接口 | arkcli SSO 登录态；回退时用 Cookie、CSRF 和 Web ID | 系统凭据存储* |
+| 百炼个人 Token Plan | 控制台内部 `zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage`（通过网关） | 控制台 Cookie、`sec_token` | 系统凭据存储* |
+| DeepSeek 余额 | `GET api.deepseek.com/user/balance`（官方公开 API） | API Key（Bearer） | 系统凭据存储* |
+| DeepSeek 消费 | `GET platform.deepseek.com/api/v0/usage/cost`（控制台内部接口，按日返回账号级消费） | 浏览器会话 Token | 系统凭据存储* |
 
 \* 系统凭据存储：macOS Keychain / Windows 凭据管理器 / Linux Secret Service（通过 `keyring` 库自动选择）。
 
-Ark 回退路径是非公开控制台接口，页面升级或 Cookie 失效时可能需要更新适配；程序会显示明确错误，不会伪造额度数据。
+Ark 回退路径与百炼用量查询是非公开控制台接口，页面升级或 Cookie 失效时可能需要更新适配；程序会显示明确错误，不会伪造额度数据。
 
 ## 隐私说明
 
-- 所有查询凭据（GLM API Key、火山方舟 Cookie 等）仅存放在本机系统凭据存储（macOS Keychain / Windows 凭据管理器 / Linux Secret Service），只发送至对应官方服务，无任何遥测或第三方上报。
+- 所有查询凭据（GLM API Key、火山方舟 Cookie、百炼 Cookie 与 `sec_token`、DeepSeek API Key 与平台 Token 等）仅存放在本机系统凭据存储（macOS Keychain / Windows 凭据管理器 / Linux Secret Service），只发送至对应官方服务，无任何遥测或第三方上报。
 - 实时查询失败时，Codex 回退逻辑会在本机读取 `~/.codex/sessions/` 下的会话记录文件（包含你与 Codex 的对话内容）以提取最近一次额度快照，**仅本地解析、绝不上传**。
 - 程序不产生日志文件，不会输出 Cookie、CSRF Token 或 API Key。
 

@@ -23,6 +23,18 @@ DEFAULT_CONFIG = {
         "cookie": "",
         "web_id": "",
     },
+    "bailian": {
+        "enabled": True,
+        "cookie": "",
+        "sec_token": "",
+    },
+    "deepseek": {
+        "enabled": True,
+        "api_key": "",
+        # Open-platform console session token (NOT the API key): only this
+        # can read account-wide daily spend. Run ./update-deepseek-token.sh.
+        "platform_token": "",
+    },
     "codex": {
         "enabled": True,
     },
@@ -30,7 +42,7 @@ DEFAULT_CONFIG = {
 
 
 def load_config():
-    """Load config from file, merged with defaults."""
+    """Load config, persisting missing defaults without replacing user values."""
     if not CONFIG_FILE.exists():
         return copy.deepcopy(DEFAULT_CONFIG)
     try:
@@ -38,12 +50,25 @@ def load_config():
         cfg = copy.deepcopy(DEFAULT_CONFIG)
         if not isinstance(saved, dict):
             return cfg
+        updated = copy.deepcopy(saved)
+        for key, default in DEFAULT_CONFIG.items():
+            if key not in updated:
+                updated[key] = copy.deepcopy(default)
+            elif isinstance(default, dict) and isinstance(updated[key], dict):
+                for field, value in default.items():
+                    updated[key].setdefault(field, copy.deepcopy(value))
         for key in cfg:
             if key in saved:
                 if isinstance(cfg[key], dict) and isinstance(saved[key], dict):
                     cfg[key] = {**cfg[key], **saved[key]}
                 elif not isinstance(cfg[key], dict):
                     cfg[key] = saved[key]
+        if updated != saved:
+            try:
+                save_config(updated)
+            except OSError:
+                # A read-only file must not discard valid user settings.
+                pass
         return cfg
     except (json.JSONDecodeError, OSError):
         return copy.deepcopy(DEFAULT_CONFIG)
